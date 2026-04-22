@@ -1,0 +1,773 @@
+// ========================================
+// SAC BOOKING SYSTEM - COMPLETE HELPERS
+// All utility functions for the application
+// ========================================
+
+// ========================================
+// DATE HELPERS
+// ========================================
+
+export function getLocalDateString(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+export function getWeekDates(weekOffset = 0) {
+  const today = new Date();
+  const dayOfWeek = today.getDay();
+  const diff = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+  const monday = new Date(today);
+  monday.setDate(today.getDate() + diff + (weekOffset * 7));
+  
+  const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+  const dates = [];
+  
+  for (let i = 0; i < 5; i++) {
+    const date = new Date(monday);
+    date.setDate(monday.getDate() + i);
+    dates.push({
+      date: getLocalDateString(date),
+      day: days[i],
+      displayDate: `${date.getDate()}/${date.getMonth() + 1}`
+    });
+  }
+  
+  return dates;
+}
+
+export function getDayName(date) {
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  return dayNames[date.getDay()];
+}
+
+/**
+ * Calculate 3 business day rule
+ * Example: Booking on Wednesday = can book from Monday onwards (Wed + Thu + Fri = 3 business days)
+ * Weekends don't count as business days
+ */
+export function getEarliestBookableDate() {
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  
+  let businessDaysToAdd = 3;
+  let currentDate = new Date(now);
+  
+  while (businessDaysToAdd > 0) {
+    currentDate.setDate(currentDate.getDate() + 1);
+    const dayOfWeek = currentDate.getDay();
+    
+    // Skip weekends (0 = Sunday, 6 = Saturday)
+    if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+      businessDaysToAdd--;
+    }
+  }
+  
+  return currentDate;
+}
+
+/**
+ * Check if a date is bookable based on 3 business day rule
+ */
+export function isSlotBookable(date, period) {
+  const slotDate = new Date(date);
+  slotDate.setHours(0, 0, 0, 0);
+  
+  const earliestDate = getEarliestBookableDate();
+  
+  return slotDate >= earliestDate;
+}
+
+/**
+ * Check if a date is in the past
+ */
+export function isPastDate(date) {
+  const slotDate = new Date(date);
+  slotDate.setHours(0, 0, 0, 0);
+  
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  return slotDate < today;
+}
+
+/**
+ * Check if booking can be edited or deleted (same 3 business day rule)
+ */
+export function canEditOrDelete(bookingDate) {
+  const booking = new Date(bookingDate);
+  booking.setHours(0, 0, 0, 0);
+  
+  const earliestDate = getEarliestBookableDate();
+  
+  return booking >= earliestDate;
+}
+
+export function formatHoursMinutes(decimalHours) {
+  if (!decimalHours || decimalHours === 0) return '0h';
+  const hours = Math.floor(decimalHours);
+  const minutes = Math.round((decimalHours - hours) * 60);
+  
+  if (hours === 0) return `${minutes}m`;
+  if (minutes === 0) return `${hours}h`;
+  return `${hours}h ${minutes}m`;
+}
+
+export function getCapacityKey(slot) {
+  return `${slot.date}_${slot.day}_${slot.period}`;
+}
+
+/**
+ * Generate unique ID for new records
+ */
+export function generateUniqueId() {
+  return Date.now().toString() + '_' + Math.random().toString(36).substr(2, 9);
+}
+
+/**
+ * Alias for generateUniqueId (used in some components)
+ */
+export function generateId() {
+  return generateUniqueId();
+}
+
+/**
+ * Get periods for a specific day from schedule
+ */
+export function getPeriodsForDay(dayName, schedule) {
+  if (!schedule || !schedule[dayName]) return [];
+  
+  return Object.keys(schedule[dayName]).map(period => ({
+    period,
+    ...schedule[dayName][period]
+  }));
+}
+
+/**
+ * Get slot status (past, blocked, bookable, etc)
+ */
+export function getSlotStatus(date, dayName, period, blockedSlots) {
+  // Check if past
+  if (isPastDate(date)) return 'past';
+  
+  // Check if blocked
+  const blocked = blockedSlots?.some(slot => 
+    slot.date === getLocalDateString(date) && 
+    slot.day === dayName && 
+    String(slot.period) === String(period)
+  );
+  if (blocked) return 'blocked';
+  
+  // Check if bookable (3 day rule)
+  if (!isSlotBookable(date, period)) return 'too-soon';
+  
+  return 'available';
+}
+
+// ========================================
+// LEARNER HELPERS
+// ========================================
+
+/**
+ * Find learner by ID with name fallback
+ */
+export function findLearnerById(learners, learnerId, learnerName = null) {
+  if (!learners || !learnerId) return null;
+  
+  // Try to find by ID first
+  let learner = learners.find(l => l.id === learnerId);
+  
+  // If not found and learnerName provided, try name-based lookup
+  if (!learner && learnerName) {
+    learner = learners.find(l => {
+      const fullName = `${l.firstName || ''} ${l.lastName || ''}`.trim();
+      return fullName === learnerName || l.name === learnerName;
+    });
+  }
+  
+  if (learner) {
+    return {
+      ...learner,
+      displayName: `${learner.firstName || ''} ${learner.lastName || ''}`.trim() || 
+                   learner.name || 
+                   `Unknown Learner (${learnerId})`
+    };
+  }
+  return null;
+}
+
+/**
+ * Get learners by year level
+ */
+export function getLearnersByYearLevel(learners, yearLevel) {
+  if (!learners || !yearLevel) return learners || [];
+  return learners.filter(l => String(l.yearLevel) === String(yearLevel));
+}
+
+/**
+ * Get learners with SAC conditions only
+ */
+export function getLearnersWithSAC(learners) {
+  if (!learners) return [];
+  return learners.filter(l => {
+    // Has SAC conditions and not declined
+    const hasSAC = l.sacConditions && 
+                   l.sacConditions !== '' && 
+                   l.sacConditions !== '[]' &&
+                   l.sacConditions !== 'null';
+    const notDeclined = !l.isDeclined;
+    return hasSAC && notDeclined;
+  });
+}
+
+/**
+ * Get learners by year level with SAC
+ */
+export function getLearnersByYearLevelWithSAC(learners, yearLevel) {
+  if (!learners || !yearLevel) return [];
+  const byYear = getLearnersByYearLevel(learners, yearLevel);
+  return getLearnersWithSAC(byYear);
+}
+
+/**
+ * Parse SAC conditions string to array
+ */
+export function getConditionsArray(sacConditions) {
+  if (!sacConditions) return [];
+  
+  // If already array
+  if (Array.isArray(sacConditions)) return sacConditions;
+  
+  // If JSON string array
+  if (typeof sacConditions === 'string') {
+    // Try parsing JSON
+    if (sacConditions.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(sacConditions);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (e) {
+        // Not valid JSON, treat as comma-separated
+      }
+    }
+    
+    // Comma-separated string
+    return sacConditions.split(',').map(s => s.trim()).filter(Boolean);
+  }
+  
+  return [];
+}
+
+// ========================================
+// TEACHER HELPERS
+// ========================================
+
+/**
+ * Find teacher by ID or email
+ */
+export function findTeacherById(teachers, teacherId) {
+  if (!teachers || !teacherId) return null;
+  
+  const teacher = teachers.find(t => t.id === teacherId || t.email === teacherId);
+  if (teacher) {
+    return {
+      ...teacher,
+      displayName: teacher.name || 
+                   `${teacher.firstName || ''} ${teacher.lastName || ''}`.trim() || 
+                   teacher.email ||
+                   `Unknown Teacher (${teacherId})`
+    };
+  }
+  return null;
+}
+
+/**
+ * Find teacher by code
+ */
+export function findTeacherByCode(teachers, code) {
+  if (!teachers || !code) return null;
+  return teachers.find(t => t.code === code);
+}
+
+// ========================================
+// SUBJECT HELPERS
+// ========================================
+
+/**
+ * Find subject by code or name
+ */
+export function findSubjectByCode(subjects, code) {
+  if (!subjects || !code) return null;
+  return subjects.find(s => s.code === code || s.ttCode === code || s.name === code);
+}
+
+/**
+ * Get subjects by year level
+ */
+export function getSubjectsByYearLevel(subjects, yearLevel) {
+  if (!subjects || !yearLevel) return subjects || [];
+  return subjects.filter(s => {
+    // Include if subject matches year level OR has no year level (all years)
+    return !s.yearLevel || 
+           s.yearLevel === '' || 
+           String(s.yearLevel) === String(yearLevel);
+  });
+}
+
+// ========================================
+// VENUE HELPERS
+// ========================================
+
+/**
+ * Find venue by name or ID
+ */
+export function findVenueByName(venues, venueName) {
+  if (!venues || !venueName) return null;
+  return venues.find(v => v.name === venueName || v.id === venueName);
+}
+
+/**
+ * Find venue by ID
+ */
+export function findVenueById(venues, venueId) {
+  if (!venues || !venueId) return null;
+  return venues.find(v => v.id === venueId);
+}
+
+// ========================================
+// READER/WRITER HELPERS
+// ========================================
+
+/**
+ * Find R/W by name
+ */
+export function findReaderWriterByName(readerWriters, rwName) {
+  if (!readerWriters || !rwName) return null;
+  
+  return readerWriters.find(rw => {
+    const fullName = `${rw.firstName || ''} ${rw.lastName || ''}`.trim();
+    return rw.name === rwName || fullName === rwName || rw.id === rwName;
+  });
+}
+
+/**
+ * Find R/W by ID
+ */
+export function findRWById(readerWriters, rwId) {
+  if (!readerWriters || !rwId) return null;
+  return readerWriters.find(rw => rw.id === rwId);
+}
+
+/**
+ * Alias for findRWById
+ */
+export function findReaderWriterById(readerWriters, rwId) {
+  return findRWById(readerWriters, rwId);
+}
+
+/**
+ * Get R/W display name
+ */
+export function getReaderWriterName(rw) {
+  if (!rw) return '';
+  
+  if (rw.name) return rw.name;
+  
+  const firstName = rw.firstName || '';
+  const lastName = rw.lastName || '';
+  return `${firstName} ${lastName}`.trim() || 'Unknown R/W';
+}
+
+/**
+ * Check if R/W is available on a day
+ */
+export function isReaderWriterAvailable(rw, dayName) {
+  if (!rw || !rw.daysAvailable) return true; // Assume available if not specified
+  
+  const daysAvailable = rw.daysAvailable.toLowerCase();
+  return daysAvailable.includes(dayName.toLowerCase());
+}
+
+// ========================================
+// PARSING HELPERS
+// ========================================
+
+/**
+ * Parse learners field - handles array, comma-separated string, JSON array string
+ */
+export function parseLearnersField(learners) {
+  if (!learners) return [];
+  
+  // Already an array
+  if (Array.isArray(learners)) return learners;
+  
+  // JSON string array
+  if (typeof learners === 'string') {
+    // Try parsing JSON array
+    if (learners.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(learners);
+        return Array.isArray(parsed) ? parsed : [learners];
+      } catch (e) {
+        // Not valid JSON, treat as comma-separated
+      }
+    }
+    
+    // Comma-separated string
+    if (learners.includes(',')) {
+      return learners.split(',').map(s => s.trim()).filter(Boolean);
+    }
+    
+    // Single learner ID/name
+    return [learners];
+  }
+  
+  // Fallback: treat as single item
+  return [learners];
+}
+
+/**
+ * Parse reader/writers field - handles object, JSON string
+ */
+export function parseReaderWritersField(readerWriters) {
+  if (!readerWriters) return {};
+  
+  // Already an object
+  if (typeof readerWriters === 'object' && !Array.isArray(readerWriters)) {
+    return readerWriters;
+  }
+  
+  // JSON string
+  if (typeof readerWriters === 'string') {
+    if (readerWriters.startsWith('{')) {
+      try {
+        return JSON.parse(readerWriters);
+      } catch (e) {
+        console.warn('Failed to parse readerWriters JSON:', readerWriters);
+        return {};
+      }
+    }
+  }
+  
+  return {};
+}
+
+/**
+ * Parse selected SAC field - handles object, JSON string
+ */
+export function parseSelectedSACField(selectedSAC) {
+  if (!selectedSAC) return {};
+  
+  // Already an object
+  if (typeof selectedSAC === 'object' && !Array.isArray(selectedSAC)) {
+    return selectedSAC;
+  }
+  
+  // JSON string
+  if (typeof selectedSAC === 'string') {
+    if (selectedSAC.startsWith('{')) {
+      try {
+        return JSON.parse(selectedSAC);
+      } catch (e) {
+        console.warn('Failed to parse selectedSAC JSON:', selectedSAC);
+        return {};
+      }
+    }
+  }
+  
+  return {};
+}
+
+/**
+ * Parse learner venues field - handles object, JSON string
+ */
+export function parseLearnerVenuesField(learnerVenues) {
+  if (!learnerVenues) return {};
+  
+  // Already an object
+  if (typeof learnerVenues === 'object' && !Array.isArray(learnerVenues)) {
+    return learnerVenues;
+  }
+  
+  // JSON string
+  if (typeof learnerVenues === 'string') {
+    if (learnerVenues.startsWith('{')) {
+      try {
+        return JSON.parse(learnerVenues);
+      } catch (e) {
+        console.warn('Failed to parse learnerVenues JSON:', learnerVenues);
+        return {};
+      }
+    }
+  }
+  
+  return {};
+}
+
+/**
+ * Get booking display status
+ */
+export function getBookingStatus(booking) {
+  if (!booking) return 'Unknown';
+  
+  const statusMap = {
+    'pending': 'Pending',
+    'confirmed': 'Confirmed',
+    'declined': 'Declined',
+    'deleted': 'Deleted',
+    'cancelled': 'Cancelled'
+  };
+  
+  return statusMap[booking.status] || booking.status || 'Unknown';
+}
+
+/**
+ * Get booking status color class
+ */
+export function getBookingStatusColor(status) {
+  const colorMap = {
+    'pending': 'bg-yellow-100 text-yellow-800',
+    'confirmed': 'bg-green-100 text-green-800',
+    'declined': 'bg-red-100 text-red-800',
+    'deleted': 'bg-gray-100 text-gray-800',
+    'cancelled': 'bg-orange-100 text-orange-800'
+  };
+  
+  return colorMap[status] || 'bg-gray-100 text-gray-800';
+}
+
+// ========================================
+// EMAIL HELPERS
+// ========================================
+
+export function generateBookingEmail(booking, learners, isTeacher = false) {
+  const learnerNames = learners.map(l => `${l.firstName} ${l.lastName}`).join(', ');
+  
+  const subject = isTeacher 
+    ? `SAC Booking Confirmation - ${booking.date}`
+    : `SAC Booking - ${booking.subject}`;
+
+  const body = `
+═══════════════════════════════════════
+📅 SAC BOOKING CONFIRMATION
+═══════════════════════════════════════
+
+Date: ${booking.date}
+Day: ${booking.day}
+Period: ${booking.period}
+Subject: ${booking.subject}
+Room: ${booking.room}
+
+${isTeacher ? `Teacher: ${booking.teacher}` : `Learners: ${learnerNames}`}
+
+Status: ${booking.status}
+
+${booking.multiSessionReason ? `
+Multi-Session Booking: ${booking.totalSessions} sessions
+Reason: ${booking.multiSessionReason}
+` : ''}
+
+Thank you,
+SAC Booking System
+`;
+
+  return {
+    subject,
+    body: body.trim()
+  };
+}
+
+export function copyEmailToClipboard(email) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(email.body)
+      .then(() => true)
+      .catch(() => false);
+  }
+  
+  // Fallback
+  const textArea = document.createElement('textarea');
+  textArea.value = email.body;
+  textArea.style.position = 'fixed';
+  textArea.style.left = '-999999px';
+  document.body.appendChild(textArea);
+  textArea.select();
+  
+  try {
+    document.execCommand('copy');
+    document.body.removeChild(textArea);
+    return Promise.resolve(true);
+  } catch (err) {
+    document.body.removeChild(textArea);
+    return Promise.resolve(false);
+  }
+}
+
+// ========================================
+// VALIDATION HELPERS
+// ========================================
+
+/**
+ * Validate booking form data
+ */
+export function validateBookingForm(formData) {
+  const errors = [];
+  
+  // Required fields
+  if (!formData.date) errors.push('Date is required');
+  if (!formData.day) errors.push('Day is required');
+  if (!formData.period) errors.push('Period is required');
+  if (!formData.teacher) errors.push('Teacher is required');
+  if (!formData.subject) errors.push('Subject is required');
+  if (!formData.room) errors.push('Room is required');
+  if (!formData.learners || formData.learners.length === 0) {
+    errors.push('At least one learner must be selected');
+  }
+  
+  // Validate email format if provided
+  if (formData.teacherEmail && !isValidEmail(formData.teacherEmail)) {
+    errors.push('Invalid teacher email format');
+  }
+  
+  // Validate year level
+  if (formData.yearLevel && !isValidYearLevel(formData.yearLevel)) {
+    errors.push('Invalid year level');
+  }
+  
+  return {
+    isValid: errors.length === 0,
+    errors
+  };
+}
+
+/**
+ * Validate email format
+ */
+export function isValidEmail(email) {
+  if (!email) return false;
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+}
+
+/**
+ * Validate year level
+ */
+export function isValidYearLevel(yearLevel) {
+  const year = parseInt(yearLevel);
+  return year >= 7 && year <= 13;
+}
+
+/**
+ * Check if array has duplicates
+ */
+export function hasDuplicates(arr) {
+  return new Set(arr).size !== arr.length;
+}
+
+// ========================================
+// FORMATTING HELPERS
+// ========================================
+
+/**
+ * Format date for display
+ */
+export function formatDate(dateStr) {
+  if (!dateStr) return '';
+  const date = new Date(dateStr);
+  return date.toLocaleDateString('en-NZ', { 
+    weekday: 'long', 
+    year: 'numeric', 
+    month: 'long', 
+    day: 'numeric' 
+  });
+}
+
+/**
+ * Format period display
+ */
+export function formatPeriod(period, dayName, schedule) {
+  if (!schedule || !schedule[dayName] || !schedule[dayName][period]) {
+    return `Period ${period}`;
+  }
+  
+  const periodInfo = schedule[dayName][period];
+  return `Period ${period} (${periodInfo.start}-${periodInfo.end})`;
+}
+
+/**
+ * Truncate text
+ */
+export function truncate(text, maxLength = 50) {
+  if (!text || text.length <= maxLength) return text;
+  return text.substring(0, maxLength) + '...';
+}
+
+// ========================================
+// ARRAY HELPERS
+// ========================================
+
+/**
+ * Group items by a property
+ */
+export function groupBy(array, key) {
+  if (!array) return {};
+  return array.reduce((result, item) => {
+    const groupKey = item[key];
+    if (!result[groupKey]) {
+      result[groupKey] = [];
+    }
+    result[groupKey].push(item);
+    return result;
+  }, {});
+}
+
+/**
+ * Sort array by property
+ */
+export function sortBy(array, key, ascending = true) {
+  if (!array) return [];
+  return [...array].sort((a, b) => {
+    const aVal = a[key];
+    const bVal = b[key];
+    
+    if (aVal === bVal) return 0;
+    if (ascending) {
+      return aVal > bVal ? 1 : -1;
+    } else {
+      return aVal < bVal ? 1 : -1;
+    }
+  });
+}
+
+/**
+ * Remove duplicates from array
+ */
+export function unique(array) {
+  return [...new Set(array)];
+}
+
+// ========================================
+// SEARCH & FILTER HELPERS
+// ========================================
+
+/**
+ * Filter items by search term across multiple fields
+ */
+export function filterBySearch(items, searchTerm, fields) {
+  if (!searchTerm || !searchTerm.trim()) return items;
+  const search = searchTerm.toLowerCase().trim();
+  
+  return items.filter(item => 
+    fields.some(field => {
+      const value = field.split('.').reduce((obj, key) => obj?.[key], item);
+      return value?.toString().toLowerCase().includes(search);
+    })
+  );
+}
+
+/**
+ * Export data to Excel (placeholder)
+ */
+export function exportToExcel(data, filename) {
+  console.log('Export to Excel:', filename, data);
+  alert('Excel export not yet implemented');
+}

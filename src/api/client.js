@@ -1,138 +1,200 @@
-// =======================================
-// API CLIENT - CORS-SAFE VERSION
-// Uses GET requests to avoid CORS preflight
-// =======================================
-
-import { CONFIG } from '../config'
+import { SCRIPT_URL } from '../config';
 
 class APIClient {
   constructor() {
-    this.baseUrl = CONFIG.SCRIPT_URL
-    this.timeout = CONFIG.API.TIMEOUT_MS
-    this.retryAttempts = CONFIG.API.RETRY_ATTEMPTS
+    this.baseURL = SCRIPT_URL;
+    this.timeout = 30000; // 30 seconds
   }
 
-  /**
-   * Make API request with retry logic
-   * Using GET to avoid CORS preflight issues
-   */
-  async request(action, data = null, attempt = 1) {
+  async request(action, data = null) {
     try {
-      // Build query string with action and data
-      const params = new URLSearchParams({
-        action: action,
-        _t: Date.now() // Cache buster
-      })
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
-      // Add data as JSON string in query parameter
-      if (data) {
-        params.append('data', JSON.stringify(data))
-      }
+      const response = await fetch(this.baseURL, {
+        method: 'POST',
+        body: JSON.stringify({ action, data }),
+        signal: controller.signal
+      });
 
-      const url = `${this.baseUrl}?${params.toString()}`
-
-      const response = await fetch(url, {
-        method: 'GET',
-        cache: 'no-cache'
-      })
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
-      const result = await response.json()
-
-      if (!result.success && result.error) {
-        throw new Error(result.error)
+      const result = await response.json();
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Unknown error from backend');
       }
 
-      return result
-
+      return result;
     } catch (error) {
-      // Retry on network errors
-      if (
-        attempt < this.retryAttempts &&
-        (error.name === 'AbortError' || error.message.includes('fetch'))
-      ) {
-        console.warn(`Request failed (attempt ${attempt}), retrying...`)
-        await this.delay(CONFIG.API.RETRY_DELAY_MS * attempt)
-        return this.request(action, data, attempt + 1)
+      if (error.name === 'AbortError') {
+        throw new Error('Request timed out. Please check your connection and try again.');
       }
-
-      // Log error
-      console.error(`API Error (${action}):`, error)
-
-      throw error
+      throw error;
     }
   }
 
-  /**
-   * Delay helper
-   */
-  delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms))
-  }
-
-  // ===================================
-  // API METHODS
-  // ===================================
-
   async getAll() {
-    return this.request('getAll')
+    return this.request('getAll');
   }
 
-  async saveLearners(data) {
-    return this.request('saveLearners', data)
+  async saveData(action, data) {
+    return this.request(action, data);
   }
 
-  async saveTeachers(data) {
-    return this.request('saveTeachers', data)
+  async saveBookings(bookings) {
+    return this.request('saveBookings', bookings);
   }
 
-  async saveReaderWriters(data) {
-    return this.request('saveReaderWriters', data)
+  async saveBookingHistory(history) {
+    return this.request('saveBookingHistory', history);
   }
 
-  async saveVenues(data) {
-    return this.request('saveVenues', data)
+  async saveLearners(learners) {
+    return this.request('saveLearners', learners);
   }
 
-  async saveSubjects(data) {
-    return this.request('saveSubjects', data)
+  async saveTeachers(teachers) {
+    return this.request('saveTeachers', teachers);
   }
 
-  async saveBookings(data) {
-    return this.request('saveBookings', data)
+  async saveReaderWriters(readerWriters) {
+    return this.request('saveReaderWriters', readerWriters);
   }
 
-  async saveBookingHistory(data) {
-    return this.request('saveBookingHistory', data)
+  async saveVenues(venues) {
+    return this.request('saveVenues', venues);
   }
 
-  async saveBlockedSlots(data) {
-    return this.request('saveBlockedSlots', data)
+  async saveSubjects(subjects) {
+    return this.request('saveSubjects', subjects);
   }
 
-  async saveSessionCapacities(data) {
-    return this.request('saveSessionCapacities', data)
+  async saveBlockedSlots(blockedSlots) {
+    return this.request('saveBlockedSlots', blockedSlots);
   }
 
-  async saveNotifications(data) {
-    return this.request('saveNotifications', data)
+  async saveSessionCapacities(sessionCapacities) {
+    return this.request('saveSessionCapacities', sessionCapacities);
   }
 
-  async saveBatch(operations) {
-    return this.request('saveBatch', operations)
+  async saveNotifications(notifications) {
+    return this.request('saveNotifications', notifications);
   }
 
-  async sendEmails(emailData) {
-    return this.request('sendEmails', emailData)
+  // CRUD Operations for Bookings
+  async createBooking(booking) {
+    return this.request('createBooking', booking);
   }
 
-  async healthCheck() {
-    return this.request('healthCheck')
+  async updateBooking(id, updates) {
+    return this.request('updateBooking', { id, ...updates });
+  }
+
+  async deleteBooking(id) {
+    return this.request('deleteBooking', { id });
+  }
+
+  async approveBooking(id) {
+    return this.request('approveBooking', { id });
+  }
+
+  async declineBooking(id, reason) {
+    return this.request('declineBooking', { id, reason });
+  }
+
+  // CRUD Operations for Learners
+  async createLearner(learner) {
+    return this.request('createLearner', learner);
+  }
+
+  async updateLearner(id, updates) {
+    return this.request('updateLearner', { id, ...updates });
+  }
+
+  async deleteLearner(id) {
+    return this.request('deleteLearner', { id });
+  }
+
+  // CRUD Operations for Teachers
+  async createTeacher(teacher) {
+    return this.request('createTeacher', teacher);
+  }
+
+  async updateTeacher(id, updates) {
+    return this.request('updateTeacher', { id, ...updates });
+  }
+
+  async deleteTeacher(id) {
+    return this.request('deleteTeacher', { id });
+  }
+
+  // CRUD Operations for Reader/Writers
+  async createReaderWriter(rw) {
+    return this.request('createReaderWriter', rw);
+  }
+
+  async updateReaderWriter(id, updates) {
+    return this.request('updateReaderWriter', { id, ...updates });
+  }
+
+  async deleteReaderWriter(id) {
+    return this.request('deleteReaderWriter', { id });
+  }
+
+  // CRUD Operations for Venues
+  async createVenue(venue) {
+    return this.request('createVenue', venue);
+  }
+
+  async updateVenue(id, updates) {
+    return this.request('updateVenue', { id, ...updates });
+  }
+
+  async deleteVenue(id) {
+    return this.request('deleteVenue', { id });
+  }
+
+  // CRUD Operations for Subjects
+  async createSubject(subject) {
+    return this.request('createSubject', subject);
+  }
+
+  async updateSubject(id, updates) {
+    return this.request('updateSubject', { id, ...updates });
+  }
+
+  async deleteSubject(id) {
+    return this.request('deleteSubject', { id });
+  }
+
+  // Capacity Management
+  async updateCapacity(session, capacity) {
+    return this.request('updateCapacity', { session, capacity });
+  }
+
+  async blockSlot(date, day, period, reason) {
+    return this.request('blockSlot', { date, day, period, reason });
+  }
+
+  async unblockSlot(date, day, period) {
+    return this.request('unblockSlot', { date, day, period });
+  }
+
+  // Sequential saves for reliability
+  async saveMultiple(saves) {
+    const results = [];
+    for (const save of saves) {
+      const result = await this.request(save.action, save.data);
+      results.push(result);
+    }
+    return results;
   }
 }
 
-// Export singleton instance
-export const api = new APIClient()
+const api = new APIClient();
+export default api;

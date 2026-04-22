@@ -1,0 +1,487 @@
+import React from 'react';
+import { useDataStore } from '../../store/dataStore';
+import { useUIStore } from '../../store/uiStore';
+import useAuthStore from '../../store/authStore';
+import { findLearnerById, findTeacherById, findVenueByName, parseLearnersField } from '../../utils/helpers';
+
+function BookingCard({ booking }) {
+  const { learners, teachers, venues, readerWriters, updateBooking, deleteBooking, approveBooking, declineBooking } = useDataStore();
+  const { openBookingForm, openHistoryModal, openAssignRWModal, openAssignVenueModal, openSmallGroupModal, showNotification } = useUIStore();
+  const { userRole, currentUser } = useAuthStore();
+
+  // Debug logs
+  console.log('========== BOOKING CARD DEBUG ==========');
+  console.log('Booking ID:', booking.id);
+  console.log('FULL BOOKING OBJECT:', booking);
+  console.log('Raw booking.learners:', booking.learners);
+  console.log('Raw booking.learnerNames:', booking.learnerNames);
+  console.log('Type of learnerNames:', typeof booking.learnerNames);
+  console.log('Other possible fields:', {
+    learner: booking.learner,
+    studentName: booking.studentName,
+    studentNames: booking.studentNames,
+    students: booking.students,
+    learnerName: booking.learnerName
+  });
+  console.log('Available learners in store:', learners.length);
+  console.log('First 3 learners:', learners.slice(0, 3).map(l => ({
+    id: l.id,
+    name: `${l.firstName} ${l.lastName}`,
+    studentId: l.studentId
+  })));
+  console.log('=========================================');
+
+  // Parse learners (could be comma-separated string or array)
+  let learnerIds = parseLearnersField(booking.learners);
+  console.log('Parsed learner IDs:', learnerIds);
+  
+  // Parse learner names from booking (for name-based fallback lookup)
+  let learnerNamesArray = [];
+  if (Array.isArray(booking.learnerNames)) {
+    learnerNamesArray = booking.learnerNames;
+  } else if (typeof booking.learnerNames === 'string' && booking.learnerNames) {
+    learnerNamesArray = booking.learnerNames.split(',').map(n => n.trim());
+  }
+  console.log('Parsed learner names:', learnerNamesArray);
+  
+  // ADDITIONAL CHECK: If still empty, check if there's a learnerNames field that's not being picked up
+  if (learnerNamesArray.length === 0 && booking.learnerNames) {
+    console.log('WARNING: booking.learnerNames exists but parsed to empty array!');
+    console.log('Type:', typeof booking.learnerNames);
+    console.log('Value:', booking.learnerNames);
+    console.log('Is array?:', Array.isArray(booking.learnerNames));
+    console.log('Length if array:', Array.isArray(booking.learnerNames) ? booking.learnerNames.length : 'N/A');
+  }
+  
+  // Parse reader/writers JSON
+  let rwAssignments = {};
+  try {
+    if (typeof booking.readerWriters === 'string' && booking.readerWriters) {
+      rwAssignments = JSON.parse(booking.readerWriters);
+    } else if (typeof booking.readerWriters === 'object') {
+      rwAssignments = booking.readerWriters || {};
+    }
+  } catch (e) {
+    console.error('Error parsing readerWriters:', e);
+    rwAssignments = {};
+  }
+  console.log('R/W assignments:', rwAssignments);
+
+  // FALLBACK: If no learners in booking.learners, extract IDs from readerWriters/selectedSAC/learnerVenues
+  if (learnerIds.length === 0) {
+    console.log('⚠️ No learners in booking.learners field, trying fallback extraction...');
+    
+    // Try extracting from readerWriters object (most reliable for old bookings)
+    if (rwAssignments && Object.keys(rwAssignments).length > 0) {
+      learnerIds = Object.keys(rwAssignments);
+      console.log('✅ Extracted', learnerIds.length, 'learner IDs from readerWriters:', learnerIds);
+    }
+    
+    // Try extracting from selectedSAC object if still empty
+    if (learnerIds.length === 0 && booking.selectedSAC) {
+      let selectedSACObj = {};
+      try {
+        if (typeof booking.selectedSAC === 'string' && booking.selectedSAC !== '{}') {
+          selectedSACObj = JSON.parse(booking.selectedSAC);
+        } else if (typeof booking.selectedSAC === 'object') {
+          selectedSACObj = booking.selectedSAC;
+        }
+        if (Object.keys(selectedSACObj).length > 0) {
+          learnerIds = Object.keys(selectedSACObj);
+          console.log('✅ Extracted', learnerIds.length, 'learner IDs from selectedSAC:', learnerIds);
+        }
+      } catch (e) {
+        console.error('Error parsing selectedSAC:', e);
+      }
+    }
+    
+    // Try extracting from learnerVenues object if still empty
+    if (learnerIds.length === 0 && booking.learnerVenues) {
+      let learnerVenuesObj = {};
+      try {
+        if (typeof booking.learnerVenues === 'string' && booking.learnerVenues !== '{}') {
+          learnerVenuesObj = JSON.parse(booking.learnerVenues);
+        } else if (typeof booking.learnerVenues === 'object') {
+          learnerVenuesObj = booking.learnerVenues;
+        }
+        if (Object.keys(learnerVenuesObj).length > 0) {
+          learnerIds = Object.keys(learnerVenuesObj);
+          console.log('✅ Extracted', learnerIds.length, 'learner IDs from learnerVenues:', learnerIds);
+        }
+      } catch (e) {
+        console.error('Error parsing learnerVenues:', e);
+      }
+    }
+  }
+
+  // Parse declined SAC learners
+  const declinedSACLearnerIds = booking.declinedSACLearners 
+    ? booking.declinedSACLearners.toString().split(',').filter(Boolean)
+    : [];
+
+  // Get full learner objects - pass name as fallback for ID mismatch
+  const bookingLearners = learnerIds
+    .map((id, index) => {
+      const learnerName = learnerNamesArray[index];
+      const learner = findLearnerById(learners, id, learnerName);
+      console.log(`Looking up learner ${id} (${learnerName}):`, learner);
+      return learner;
+    })
+    .filter(Boolean);
+
+  console.log('Found learners:', bookingLearners);
+
+  // FALLBACK: If no learners found but we have names, create placeholder objects
+  const displayLearners = bookingLearners.length > 0 
+    ? bookingLearners 
+    : learnerNamesArray.length > 0
+      ? learnerNamesArray.map((name, index) => ({
+          id: `placeholder-${index}`,
+          firstName: name.split(' ')[0] || name,
+          lastName: name.split(' ').slice(1).join(' ') || '',
+          yearLevel: booking.yearLevel || '?',
+          sacConditions: null,
+          isPlaceholder: true
+        }))
+      : [];
+
+  // Get venue
+  const venue = booking.venue ? findVenueByName(venues, booking.venue) : null;
+
+  // Get teacher
+  const teacher = findTeacherById(teachers, booking.teacherId) || 
+                  teachers.find(t => t.email === booking.teacherEmail);
+
+  // Check if current user is the booking owner
+  const isOwner = currentUser?.email === booking.teacherEmail || currentUser?.id === booking.teacherId;
+
+  // Status badge colors
+  const getStatusColor = (status) => {
+    const colors = {
+      pending: 'bg-yellow-100 text-yellow-800',
+      confirmed: 'bg-green-100 text-green-800',
+      declined: 'bg-red-100 text-red-800',
+      edit_pending: 'bg-orange-100 text-orange-800',
+      edit_approved: 'bg-blue-100 text-blue-800',
+      deletion_pending: 'bg-purple-100 text-purple-800',
+      deletion_confirmed: 'bg-gray-100 text-gray-800'
+    };
+    return colors[status] || 'bg-gray-100 text-gray-800';
+  };
+
+  const getStatusLabel = (status) => {
+    const labels = {
+      pending: 'Pending',
+      confirmed: 'Confirmed',
+      declined: 'Declined',
+      edit_pending: 'Edit Pending',
+      edit_approved: 'Edit Approved',
+      deletion_pending: 'Deletion Pending',
+      deletion_confirmed: 'Deletion Confirmed'
+    };
+    return labels[status] || status;
+  };
+
+  // Handle edit - teachers request edit, admins edit directly
+  const handleEdit = () => {
+    if (userRole === 'admin') {
+      // Admin can edit directly
+      openBookingForm(booking);
+    } else if (isOwner) {
+      // Teacher requests edit approval
+      updateBooking(booking.id, { status: 'edit_pending' });
+      showNotification('Edit request submitted for approval', 'info');
+    }
+  };
+
+  // Handle delete - teachers request deletion, admins delete directly
+  const handleDelete = async () => {
+    if (userRole === 'admin') {
+      // Admin can delete directly
+      if (confirm('Are you sure you want to delete this booking?')) {
+        try {
+          await deleteBooking(booking.id);
+          showNotification('Booking deleted successfully', 'success');
+        } catch (error) {
+          showNotification('Failed to delete booking', 'error');
+        }
+      }
+    } else if (isOwner) {
+      // Teacher requests deletion approval
+      if (confirm('Request deletion of this booking?')) {
+        try {
+          await updateBooking(booking.id, { status: 'deletion_pending' });
+          showNotification('Deletion request submitted for approval', 'info');
+        } catch (error) {
+          showNotification('Failed to submit deletion request', 'error');
+        }
+      }
+    }
+  };
+
+  // Handle approve (admin only)
+  const handleApprove = async () => {
+    try {
+      if (booking.status === 'edit_pending') {
+        await updateBooking(booking.id, { status: 'edit_approved' });
+        showNotification('Edit approved', 'success');
+      } else if (booking.status === 'deletion_pending') {
+        await deleteBooking(booking.id);
+        showNotification('Booking deleted', 'success');
+      } else {
+        await approveBooking(booking.id);
+        showNotification('Booking approved', 'success');
+      }
+    } catch (error) {
+      showNotification('Failed to approve', 'error');
+    }
+  };
+
+  // Handle decline (admin only)
+  const handleDecline = async () => {
+    const reason = prompt('Reason for declining:');
+    if (reason) {
+      try {
+        await declineBooking(booking.id, reason);
+        showNotification('Booking declined', 'success');
+      } catch (error) {
+        showNotification('Failed to decline', 'error');
+      }
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow border-l-4 border-blue-500">
+      {/* Header */}
+      <div className="p-4">
+        <div className="flex justify-between items-start mb-3">
+          <div>
+            <h3 className="font-bold text-lg text-gray-900">{booking.subject}</h3>
+            <p className="text-sm text-gray-600">
+              {booking.day}, Period {booking.period}
+            </p>
+          </div>
+          <span className={`px-3 py-1 rounded-full text-xs font-semibold ${getStatusColor(booking.status)}`}>
+            {getStatusLabel(booking.status)}
+          </span>
+        </div>
+
+        {/* Date */}
+        <div className="mb-3 pb-3 border-b border-gray-200">
+          <p className="text-sm font-semibold text-gray-700">
+            📅 {new Date(booking.date).toLocaleDateString('en-NZ', { 
+              weekday: 'long', 
+              year: 'numeric', 
+              month: 'long', 
+              day: 'numeric' 
+            })}
+          </p>
+        </div>
+
+        {/* Teacher with Room */}
+        <div className="mb-3">
+          <p className="text-xs text-gray-500 uppercase font-semibold mb-1">Teacher</p>
+          <p className="text-sm font-medium text-gray-900">
+            {teacher ? teacher.name : booking.teacher || 'Unknown'}
+            {booking.room && <span className="text-gray-600 ml-2">• {booking.room}</span>}
+          </p>
+        </div>
+
+        {/* Learners */}
+        <div className="mb-3">
+          <p className="text-xs text-gray-500 uppercase font-semibold mb-2">
+            Learners ({displayLearners.length || learnerIds.length})
+          </p>
+          <div className="space-y-2">
+            {displayLearners.length > 0 ? (
+              displayLearners.map(learner => {
+                const rwName = rwAssignments[learner.id];
+                const isDeclinedSAC = declinedSACLearnerIds.includes(learner.id.toString());
+                const learnerVenue = booking.learnerVenues && booking.learnerVenues[learner.id];
+                
+                // Check if learner is in a small group
+                const smallGroup = booking.smallGroups?.find(g => 
+                  g.learners?.includes(learner.id) || 
+                  g.learners?.includes(learner.id?.toString())
+                );
+
+                return (
+                  <div key={learner.id} className={`rounded-lg p-3 border ${smallGroup ? 'bg-blue-50 border-blue-300' : 'bg-gray-50 border-gray-200'}`}>
+                    <div className="flex justify-between items-start">
+                      <div className="flex-1">
+                        <p className="font-medium text-sm text-gray-900">
+                          {learner.firstName} {learner.lastName}
+                          <span className="text-gray-500 text-xs ml-2">Y{learner.yearLevel}</span>
+                        </p>
+
+                        {/* SAC Conditions - SHOW ONLY SELECTED SAC */}
+                        {(() => {
+                          const selectedSAC = booking.selectedSAC?.[learner.id] || [];
+                          const hasSelectedSAC = selectedSAC.length > 0;
+                          
+                          return (hasSelectedSAC || isDeclinedSAC) && (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {hasSelectedSAC && (
+                                <span className="inline-block px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-xs font-medium">
+                                  SAC: {selectedSAC.join(', ')}
+                                </span>
+                              )}
+                              {isDeclinedSAC && (
+                                <span className="inline-block px-2 py-0.5 bg-red-50 text-red-700 rounded text-xs font-medium">
+                                  Declined
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
+
+                        {/* Small Group or Individual Assignment */}
+                        {smallGroup ? (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            <span className="inline-block px-2 py-0.5 bg-blue-100 text-blue-800 rounded text-xs font-bold">
+                              Small Group {smallGroup.id}
+                            </span>
+                            {smallGroup.readerWriter && (
+                              <span className="inline-block px-2 py-0.5 bg-green-50 text-green-700 rounded text-xs font-medium">
+                                R/W: {smallGroup.readerWriter}
+                              </span>
+                            )}
+                            {smallGroup.venue && (
+                              <span className="inline-block px-2 py-0.5 bg-purple-50 text-purple-700 rounded text-xs font-medium">
+                                Venue: {smallGroup.venue}
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {rwName && (
+                              <span className="inline-block px-2 py-0.5 bg-green-50 text-green-700 rounded text-xs font-medium">
+                                R/W: {rwName}
+                              </span>
+                            )}
+                            {learnerVenue && (
+                              <span className="inline-block px-2 py-0.5 bg-purple-50 text-purple-700 rounded text-xs font-medium">
+                                Venue: {learnerVenue}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                <p className="text-sm text-yellow-800">
+                  {booking.learnerNames ? (
+                    <>Learners: {booking.learnerNames}</>
+                  ) : learnerIds.length > 0 ? (
+                    <>Learner IDs: {learnerIds.join(', ')}</>
+                  ) : (
+                    <>No learner information available</>
+                  )}
+                </p>
+                <p className="text-xs text-yellow-600 mt-1">
+                  ⚠️ Full learner details not found in database
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Year Level */}
+        {booking.yearLevel && (
+          <div className="mb-3">
+            <p className="text-xs text-gray-500 uppercase font-semibold mb-1">Year Level</p>
+            <p className="text-sm text-gray-900">Year {booking.yearLevel}</p>
+          </div>
+        )}
+
+        {/* Reason */}
+        {booking.reason && (
+          <div className="mb-3 bg-blue-50 rounded-lg p-3 border border-blue-200">
+            <p className="text-xs text-gray-500 uppercase font-semibold mb-1">Reason</p>
+            <p className="text-sm text-gray-700">{booking.reason}</p>
+          </div>
+        )}
+
+        {/* Primary Actions - Compact row with all buttons */}
+        <div className="flex flex-wrap gap-1.5 mt-4 pt-3 border-t border-gray-200">
+          {/* History - Everyone */}
+          <button
+            onClick={() => openHistoryModal(booking)}
+            className="px-2.5 py-1.5 border border-gray-300 text-gray-700 text-xs rounded hover:bg-gray-50 font-medium transition"
+          >
+            📜 History
+          </button>
+
+          {/* Admin Actions */}
+          {userRole === 'admin' && (
+            <>
+              {/* Approve/Decline for pending bookings */}
+              {(booking.status === 'pending' || booking.status === 'edit_pending' || booking.status === 'deletion_pending') && (
+                <>
+                  <button
+                    onClick={handleApprove}
+                    className="px-2.5 py-1.5 bg-green-500 text-white text-xs rounded hover:bg-green-600 font-medium transition"
+                  >
+                    ✓ Approve
+                  </button>
+                  <button
+                    onClick={handleDecline}
+                    className="px-2.5 py-1.5 bg-red-500 text-white text-xs rounded hover:bg-red-600 font-medium transition"
+                  >
+                    ✕ Decline
+                  </button>
+                </>
+              )}
+
+              {/* Assign R/W & Venue - Admin, for confirmed AND pending bookings */}
+              {(booking.status === 'confirmed' || booking.status === 'pending') && (
+                <>
+                  <button
+                    onClick={() => openAssignRWModal(booking)}
+                    className="px-2.5 py-1.5 bg-blue-500 text-white text-xs rounded hover:bg-blue-600 font-medium transition"
+                  >
+                    👤 R/W & Venue
+                  </button>
+                  <button
+                    onClick={() => openSmallGroupModal(booking)}
+                    className="px-2.5 py-1.5 bg-purple-500 text-white text-xs rounded hover:bg-purple-600 font-medium transition"
+                  >
+                    👥 Small Groups
+                  </button>
+                </>
+              )}
+            </>
+          )}
+
+          {/* Edit/Delete for owners and admins */}
+          {(isOwner || userRole === 'admin') && (
+            <>
+              <button
+                onClick={() => {
+                  handleEdit();
+                }}
+                className="px-2.5 py-1.5 border border-blue-500 text-blue-600 text-xs rounded hover:bg-blue-50 font-medium transition"
+              >
+                ✏️ Edit
+              </button>
+              <button
+                onClick={() => {
+                  handleDelete();
+                }}
+                className="px-2.5 py-1.5 border border-red-500 text-red-600 text-xs rounded hover:bg-red-50 font-medium transition"
+              >
+                🗑️ Delete
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default BookingCard;

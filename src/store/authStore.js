@@ -1,53 +1,84 @@
-// =======================================
-// AUTH STORE - Login & User Management
-// =======================================
+import { create } from 'zustand';
 
-import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
-import { CONFIG } from '../config'
+const SYSTEM_ADMINS = [
+  'daniel.leonard@beth.school.nz',
+  'chanel.debruin@beth.school.nz'
+];
 
-export const useAuthStore = create(
-  persist(
-    (set, get) => ({
-      // State
+const useAuthStore = create((set, get) => ({
+  // State
+  currentUser: null,
+  isAuthenticated: false,
+  isLoggedIn: false,
+  userRole: null,
+  
+  // Actions
+  setCurrentUser: (user) => {
+    console.log('Setting current user:', user);
+    set({ 
+      currentUser: user, 
+      isAuthenticated: true,
+      isLoggedIn: true,
+      userRole: user?.isAdmin ? 'admin' : 'teacher'
+    });
+    localStorage.setItem('currentUser', JSON.stringify(user));
+  },
+  
+  login: (user) => {
+    console.log('Login called with user:', user);
+    set({ 
+      currentUser: user, 
+      isAuthenticated: true,
+      isLoggedIn: true,
+      userRole: user?.isAdmin ? 'admin' : 'teacher'
+    });
+    localStorage.setItem('currentUser', JSON.stringify(user));
+  },
+  
+  logout: () => {
+    console.log('Logout called');
+    set({ 
+      currentUser: null, 
+      isAuthenticated: false,
       isLoggedIn: false,
-      currentUser: null,
-      userRole: 'teacher', // 'teacher' or 'admin'
-
-      // Actions
-      login: (user) => {
-        set({
-          isLoggedIn: true,
-          currentUser: user,
-          userRole: user.isAdmin ? 'admin' : 'teacher'
-        })
-      },
-
-      logout: () => {
-        set({
-          isLoggedIn: false,
-          currentUser: null,
-          userRole: 'teacher'
-        })
-      },
-
-      checkAdmin: (email) => {
-        return CONFIG.SYSTEM_ADMINS.includes(email.toLowerCase())
-      },
-
-      // Get current user
-      getUser: () => get().currentUser,
-
-      // Check if user is admin
-      isAdmin: () => get().userRole === 'admin'
-    }),
-    {
-      name: 'sac-auth-storage', // localStorage key
-      partialize: (state) => ({
-        isLoggedIn: state.isLoggedIn,
-        currentUser: state.currentUser,
-        userRole: state.userRole
-      })
+      userRole: null
+    });
+    localStorage.removeItem('currentUser');
+  },
+  
+  updateUser: (updates) => {
+    const currentUser = get().currentUser;
+    if (currentUser) {
+      const updatedUser = { ...currentUser, ...updates };
+      set({ currentUser: updatedUser });
+      localStorage.setItem('currentUser', JSON.stringify(updatedUser));
     }
-  )
-)
+  },
+  
+  loadSavedUser: () => {
+    try {
+      const savedUser = localStorage.getItem('currentUser');
+      if (savedUser) {
+        const user = JSON.parse(savedUser);
+        console.log('Loading saved user from localStorage:', user);
+        set({ 
+          currentUser: user, 
+          isAuthenticated: true,
+          isLoggedIn: true,
+          userRole: user?.isAdmin ? 'admin' : 'teacher'
+        });
+        return user;
+      }
+      return null;
+    } catch (error) {
+      console.error('Error loading saved user:', error);
+      return null;
+    }
+  },
+  
+  checkAdmin: (email) => {
+    return SYSTEM_ADMINS.includes(email?.toLowerCase());
+  }
+}));
+
+export default useAuthStore;

@@ -1,0 +1,520 @@
+import React, { useState, useEffect } from 'react';
+import { useDataStore } from '../../store/dataStore';
+import { useUIStore } from '../../store/uiStore';
+
+function AssignRWModal() {
+  const { assignRWModalOpen, selectedBooking, closeAssignRWModal, showNotification } = useUIStore();
+  const { learners, readerWriters, venues, bookings, updateBooking } = useDataStore();
+
+  const [assignments, setAssignments] = useState({});
+  const [venueAssignments, setVenueAssignments] = useState({});
+  const [smallGroups, setSmallGroups] = useState([]);
+  const [nextGroupId, setNextGroupId] = useState(1);
+
+  useEffect(() => {
+    if (assignRWModalOpen && selectedBooking) {
+      // Load existing assignments
+      const existingRW = selectedBooking.readerWriters || {};
+      const existingVenues = selectedBooking.learnerVenues || {};
+      const existingGroups = selectedBooking.smallGroups || [];
+
+      setAssignments(existingRW);
+      setVenueAssignments(existingVenues);
+      setSmallGroups(existingGroups);
+      
+      if (existingGroups.length > 0) {
+        const maxId = Math.max(...existingGroups.map(g => g.id || 0));
+        setNextGroupId(maxId + 1);
+      }
+    }
+  }, [assignRWModalOpen, selectedBooking]);
+
+  if (!assignRWModalOpen || !selectedBooking) return null;
+
+  // Get learners for this booking
+  const bookingLearnerIds = Array.isArray(selectedBooking.learners) 
+    ? selectedBooking.learners 
+    : selectedBooking.learners?.toString().split(',').filter(Boolean) || [];
+
+  const bookingLearners = bookingLearnerIds
+    .map(id => learners.find(l => l.id === id || l.id?.toString() === id?.toString()))
+    .filter(Boolean);
+
+  // Get all bookings for this session (same date, day, period) to check availability
+  const sessionBookings = bookings.filter(b => 
+    b.id !== selectedBooking.id &&
+    b.date === selectedBooking.date &&
+    b.day === selectedBooking.day &&
+    b.period === selectedBooking.period &&
+    (b.status === 'confirmed' || b.status === 'pending')
+  );
+
+  // Get used RWs and venues (excluding small groups from THIS booking)
+  const usedRWs = new Set();
+  const usedVenues = new Set();
+
+  sessionBookings.forEach(booking => {
+    // Individual RW assignments
+    if (booking.readerWriters && typeof booking.readerWriters === 'object') {
+      Object.values(booking.readerWriters).forEach(rwName => {
+        if (rwName && rwName.trim()) {
+          usedRWs.add(rwName.trim());
+        }
+      });
+    }
+    
+    // Small group RWs and venues
+    if (Array.isArray(booking.smallGroups)) {
+      booking.smallGroups.forEach(group => {
+        if (group.readerWriter && group.readerWriter.trim()) {
+          usedRWs.add(group.readerWriter.trim());
+        }
+        if (group.venue && group.venue.trim()) {
+          usedVenues.add(group.venue.trim());
+        }
+      });
+    }
+    
+    // Individual venue assignments
+    if (booking.learnerVenues && typeof booking.learnerVenues === 'object') {
+      Object.values(booking.learnerVenues).forEach(venueName => {
+        if (venueName && venueName.trim()) {
+          usedVenues.add(venueName.trim());
+        }
+      });
+    }
+  });
+
+  console.log('Session availability check:', {
+    sessionDate: selectedBooking.date,
+    sessionDay: selectedBooking.day,
+    sessionPeriod: selectedBooking.period,
+    totalSessionBookings: sessionBookings.length,
+    usedRWs: Array.from(usedRWs),
+    usedVenues: Array.from(usedVenues)
+  });
+
+  // Check if learner is in a small group
+  const isInSmallGroup = (learnerId) => {
+    return smallGroups.some(group => group.learners?.includes(learnerId));
+  };
+
+  // Create new small group
+  const createSmallGroup = () => {
+    const newGroup = {
+      id: nextGroupId,
+      learners: [],
+      readerWriter: '',
+      venue: ''
+    };
+    setSmallGroups([...smallGroups, newGroup]);
+    setNextGroupId(nextGroupId + 1);
+  };
+
+  // Add learner to small group
+  const addLearnerToGroup = (learnerId, groupId) => {
+    // Remove from individual assignments
+    const newAssignments = { ...assignments };
+    delete newAssignments[learnerId];
+    setAssignments(newAssignments);
+
+    const newVenueAssignments = { ...venueAssignments };
+    delete newVenueAssignments[learnerId];
+    setVenueAssignments(newVenueAssignments);
+
+    // Add to group
+    const newGroups = smallGroups.map(group => {
+      if (group.id === groupId) {
+        return {
+          ...group,
+          learners: [...(group.learners || []), learnerId]
+        };
+      }
+      return group;
+    });
+    setSmallGroups(newGroups);
+  };
+
+  // Remove learner from small group
+  const removeLearnerFromGroup = (learnerId, groupId) => {
+    const newGroups = smallGroups.map(group => {
+      if (group.id === groupId) {
+        return {
+          ...group,
+          learners: (group.learners || []).filter(id => id !== learnerId)
+        };
+      }
+      return group;
+    });
+    setSmallGroups(newGroups);
+  };
+
+  // Delete small group
+  const deleteSmallGroup = (groupId) => {
+    setSmallGroups(smallGroups.filter(g => g.id !== groupId));
+  };
+
+  // Update small group RW
+  const updateGroupRW = (groupId, rwName) => {
+    const newGroups = smallGroups.map(group => {
+      if (group.id === groupId) {
+        return { ...group, readerWriter: rwName };
+      }
+      return group;
+    });
+    setSmallGroups(newGroups);
+  };
+
+  // Update small group venue
+  const updateGroupVenue = (groupId, venueName) => {
+    const newGroups = smallGroups.map(group => {
+      if (group.id === groupId) {
+        return { ...group, venue: venueName };
+      }
+      return group;
+    });
+    setSmallGroups(newGroups);
+  };
+
+  // Save assignments
+  const handleSave = async () => {
+    try {
+      // Build readerWriterAssignments object for slot calculation
+      const rwAssignments = {};
+      
+      // Add small groups (each group = 1 slot)
+      smallGroups.forEach(group => {
+        const groupKey = group.learners.join('_');
+        rwAssignments[groupKey] = {
+          learners: group.learners,
+          readerWriter: group.readerWriter,
+          venue: group.venue,
+          type: 'group'
+        };
+      });
+      
+      // Add individual assignments (each individual = 1 slot)
+      Object.entries(assignments).forEach(([learnerId, rwName]) => {
+        if (!isInSmallGroup(learnerId) && rwName) {
+          rwAssignments[learnerId] = {
+            learners: [learnerId],
+            readerWriter: rwName,
+            venue: venueAssignments[learnerId],
+            type: 'individual'
+          };
+        }
+      });
+      
+      await updateBooking(selectedBooking.id, {
+        readerWriters: assignments,
+        learnerVenues: venueAssignments,
+        smallGroups: smallGroups,
+        readerWriterAssignments: rwAssignments, // New field for slot calculation
+        // status: 'confirmed' - Keep as pending until admin approves
+      });
+      showNotification('Assignments saved successfully', 'success');
+      closeAssignRWModal();
+    } catch (error) {
+      showNotification('Failed to save assignments: ' + error.message, 'error');
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg shadow-2xl max-w-6xl w-full max-h-[95vh] overflow-hidden flex flex-col">
+        
+        {/* Header */}
+        <div className="bg-gradient-to-r from-green-600 to-green-700 px-6 py-4 flex justify-between items-center">
+          <div>
+            <h2 className="text-2xl font-bold text-white">👤 Assign Reader/Writers & Venues</h2>
+            <p className="text-green-100 text-sm mt-1">
+              {selectedBooking.subject} - {selectedBooking.day} P{selectedBooking.period}
+            </p>
+          </div>
+          <button
+            onClick={closeAssignRWModal}
+            className="text-white hover:bg-green-800 rounded-full p-2 transition"
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          
+          {/* Small Groups Section */}
+          <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-5">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-bold text-gray-800 text-lg">Small Groups (1 R/W, Multiple Learners, 1 Venue)</h3>
+              <button
+                onClick={createSmallGroup}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium text-sm transition"
+              >
+                ➕ Create Small Group
+              </button>
+            </div>
+
+            {smallGroups.length === 0 ? (
+              <p className="text-gray-500 text-center py-4">No small groups created yet</p>
+            ) : (
+              <div className="space-y-4">
+                {smallGroups.map(group => {
+                  const groupLearners = (group.learners || [])
+                    .map(id => bookingLearners.find(l => l.id === id || l.id?.toString() === id?.toString()))
+                    .filter(Boolean);
+
+                  return (
+                    <div key={group.id} className="bg-white border-2 border-blue-300 rounded-lg p-4">
+                      <div className="flex justify-between items-start mb-3">
+                        <h4 className="font-bold text-gray-800">Group {group.id}</h4>
+                        <button
+                          onClick={() => deleteSmallGroup(group.id)}
+                          className="text-red-500 hover:text-red-700 text-sm font-medium"
+                        >
+                          🗑️ Delete Group
+                        </button>
+                      </div>
+
+                      {/* Group R/W and Venue */}
+                      <div className="grid grid-cols-2 gap-3 mb-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-700 mb-1">Reader/Writer</label>
+                          <select
+                            value={group.readerWriter || ''}
+                            onChange={(e) => updateGroupRW(group.id, e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+                          >
+                            <option value="">Select R/W</option>
+                            {readerWriters.map(rw => {
+                              const rwName = `${rw.firstName} ${rw.lastName}`.trim();
+                              
+                              // Check if used elsewhere (not by THIS group)
+                              const isUsedElsewhere = usedRWs.has(rwName);
+                              const isAssignedToThisGroup = group.readerWriter?.trim() === rwName;
+                              const isInOtherGroup = smallGroups.some(g => 
+                                g.id !== group.id && g.readerWriter?.trim() === rwName
+                              );
+                              const isInIndividual = Object.values(assignments).includes(rwName);
+                              
+                              // Show if: (not used elsewhere OR assigned to THIS group) 
+                              // AND not in another group AND not assigned individually
+                              const shouldShow = (!isUsedElsewhere || isAssignedToThisGroup) && 
+                                                !isInOtherGroup && !isInIndividual;
+                              
+                              if (!shouldShow) return null;
+                              
+                              return (
+                                <option key={rw.id} value={rwName}>
+                                  {rw.firstName} {rw.lastName}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-700 mb-1">Venue</label>
+                          <select
+                            value={group.venue || ''}
+                            onChange={(e) => updateGroupVenue(group.id, e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+                          >
+                            <option value="">Select Venue</option>
+                            {venues.map(v => {
+                              // Check if used elsewhere (not by THIS group)
+                              const isUsedElsewhere = usedVenues.has(v.name.trim());
+                              const isAssignedToThisGroup = group.venue?.trim() === v.name.trim();
+                              const isInOtherGroup = smallGroups.some(g => 
+                                g.id !== group.id && g.venue?.trim() === v.name.trim()
+                              );
+                              const isInIndividual = Object.values(venueAssignments).includes(v.name);
+                              
+                              // Show if: (not used elsewhere OR assigned to THIS group)
+                              // AND not in another group AND not assigned individually
+                              const shouldShow = (!isUsedElsewhere || isAssignedToThisGroup) && 
+                                                !isInOtherGroup && !isInIndividual;
+                              
+                              if (!shouldShow) return null;
+                              
+                              return (
+                                <option key={v.id} value={v.name}>{v.name}</option>
+                              );
+                            })}
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Learners in group */}
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-700 mb-2">Learners in Group ({groupLearners.length})</label>
+                        {groupLearners.length > 0 ? (
+                          <div className="space-y-1">
+                            {groupLearners.map(learner => (
+                              <div key={learner.id} className="flex justify-between items-center bg-blue-50 px-3 py-2 rounded">
+                                <span className="text-sm font-medium">{learner.firstName} {learner.lastName}</span>
+                                <button
+                                  onClick={() => removeLearnerFromGroup(learner.id, group.id)}
+                                  className="text-red-500 hover:text-red-700 text-xs"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-gray-400 text-sm italic">No learners in this group yet</p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Individual Assignments Section */}
+          <div className="bg-gray-50 rounded-lg p-5">
+            <h3 className="font-bold text-gray-800 text-lg mb-4">Individual Assignments (1 Learner, 1 R/W, 1 Venue)</h3>
+            
+            <div className="space-y-3">
+              {bookingLearners.map(learner => {
+                const inGroup = isInSmallGroup(learner.id);
+
+                return (
+                  <div key={learner.id} className={`border rounded-lg p-4 ${inGroup ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-200'}`}>
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <h4 className="font-bold text-gray-900">{learner.firstName} {learner.lastName}</h4>
+                        <p className="text-xs text-gray-600">Year {learner.yearLevel}</p>
+                      </div>
+                      
+                      {inGroup ? (
+                        <span className="px-3 py-1 bg-blue-200 text-blue-800 rounded-full text-xs font-semibold">
+                          In Small Group
+                        </span>
+                      ) : (
+                        smallGroups.length > 0 && (
+                          <select
+                            onChange={(e) => {
+                              if (e.target.value) {
+                                addLearnerToGroup(learner.id, parseInt(e.target.value));
+                              }
+                            }}
+                            className="px-3 py-1 border border-gray-300 rounded text-xs"
+                            value=""
+                          >
+                            <option value="">Add to Group...</option>
+                            {smallGroups.map(group => (
+                              <option key={group.id} value={group.id}>Group {group.id}</option>
+                            ))}
+                          </select>
+                        )
+                      )}
+                    </div>
+
+                    {!inGroup && (
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-700 mb-1">Reader/Writer</label>
+                          <select
+                            value={assignments[learner.id] || ''}
+                            onChange={(e) => {
+                              console.log(`Changing R/W for ${learner.firstName} to:`, e.target.value);
+                              setAssignments({ ...assignments, [learner.id]: e.target.value });
+                            }}
+                            className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+                          >
+                            <option value="">Select R/W</option>
+                            {readerWriters.map(rw => {
+                              const rwName = `${rw.firstName} ${rw.lastName}`.trim();
+                              
+                              // Check if this R/W is used elsewhere (not by THIS learner)
+                              const isUsedElsewhere = usedRWs.has(rwName);
+                              const isAssignedToThisLearner = assignments[learner.id] === rwName;
+                              const isInSmallGroup = smallGroups.some(g => g.readerWriter?.trim() === rwName);
+                              
+                              // Show if: (not used elsewhere OR assigned to THIS learner) AND not in a small group
+                              const shouldShow = (!isUsedElsewhere || isAssignedToThisLearner) && !isInSmallGroup;
+                              
+                              if (!shouldShow) return null;
+                              
+                              return (
+                                <option key={rw.id} value={rwName}>
+                                  {rw.firstName} {rw.lastName}
+                                </option>
+                              );
+                            })}
+                          </select>
+                          {assignments[learner.id] && (
+                            <p className="text-xs text-green-600 mt-1 font-medium">✓ Current: {assignments[learner.id]}</p>
+                          )}
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-700 mb-1">Venue</label>
+                          <select
+                            value={venueAssignments[learner.id] || ''}
+                            onChange={(e) => {
+                              console.log(`Changing venue for ${learner.firstName} to:`, e.target.value);
+                              setVenueAssignments({ ...venueAssignments, [learner.id]: e.target.value });
+                            }}
+                            className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+                          >
+                            <option value="">Select Venue</option>
+                            {venues.map(v => {
+                              // Check if this venue is used elsewhere (not by THIS learner)
+                              const isUsedElsewhere = usedVenues.has(v.name.trim());
+                              const isAssignedToThisLearner = venueAssignments[learner.id] === v.name;
+                              const isInSmallGroup = smallGroups.some(g => g.venue?.trim() === v.name.trim());
+                              
+                              // Show if: (not used elsewhere OR assigned to THIS learner) AND not in a small group
+                              const shouldShow = (!isUsedElsewhere || isAssignedToThisLearner) && !isInSmallGroup;
+                              
+                              if (!shouldShow) return null;
+                              
+                              return (
+                                <option key={v.id} value={v.name}>{v.name}</option>
+                              );
+                            })}
+                          </select>
+                          {venueAssignments[learner.id] && (
+                            <p className="text-xs text-green-600 mt-1 font-medium">✓ Current: {venueAssignments[learner.id]}</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Availability Info */}
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+            <p className="text-sm text-yellow-800">
+              ℹ️ <strong>Availability:</strong> Reader/Writers and Venues that are already assigned to other bookings in this session are automatically hidden from the dropdowns.
+            </p>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="border-t bg-gray-50 px-6 py-4 flex justify-end space-x-3">
+          <button
+            onClick={closeAssignRWModal}
+            className="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 font-semibold"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-semibold"
+          >
+            💾 Save Assignments
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default AssignRWModal;

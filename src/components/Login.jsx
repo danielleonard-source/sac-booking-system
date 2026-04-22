@@ -3,7 +3,7 @@
 // =======================================
 
 import { useState } from 'react'
-import { useAuthStore } from '../store/authStore'
+import useAuthStore from '../store/authStore'
 import { useDataStore } from '../store/dataStore'
 import { useUIStore } from '../store/uiStore'
 

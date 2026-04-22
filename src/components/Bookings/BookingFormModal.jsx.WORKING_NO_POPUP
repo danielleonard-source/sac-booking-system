@@ -1,0 +1,584 @@
+import React, { useState, useEffect } from 'react';
+import { useUIStore } from '../../store/uiStore';
+import { useDataStore } from '../../store/dataStore';
+import useAuthStore from '../../store/authStore';
+import { YEAR_LEVELS } from '../../config';
+import { 
+  getConditionsArray, 
+  findLearnerById, 
+  getLearnersByYearLevelWithSAC,
+  getSubjectsByYearLevel,
+  validateBookingForm,
+  getDayName
+} from '../../utils/helpers';
+
+function BookingFormModal() {
+  const { 
+    bookingFormOpen, 
+    bookingFormDefaults, 
+    editingBooking, 
+    closeBookingForm, 
+    showNotification 
+  } = useUIStore();
+  
+  const { 
+    learners, 
+    subjects, 
+    saveBooking,
+    getAvailableSlots,
+    canBookSlots
+  } = useDataStore();
+  
+  const { currentUser } = useAuthStore();
+
+  const [form, setForm] = useState({
+    date: '',
+    day: '',
+    period: '',
+    yearLevel: '',
+    teacher: '',
+    teacherEmail: '',
+    subject: '',
+    subjectCode: '',
+    room: '',
+    learners: [],
+    status: 'pending',
+    readerWriters: {},
+    selectedSAC: {},
+    declinedSACLearners: [],
+    declinedSACReasons: {}
+  });
+
+  const [capacityError, setCapacityError] = useState(null);
+  const [learnerSearch, setLearnerSearch] = useState('');
+
+  useEffect(() => {
+    if (bookingFormOpen) {
+      if (editingBooking) {
+        // Edit mode
+        setForm({
+          ...editingBooking,
+          yearLevel: editingBooking.yearLevel || '',
+          learners: editingBooking.learners || [],
+          selectedSAC: editingBooking.selectedSAC || {},
+          declinedSACLearners: editingBooking.declinedSACLearners || [],
+          declinedSACReasons: editingBooking.declinedSACReasons || {}
+        });
+      } else if (bookingFormDefaults) {
+        // New booking - AUTO-POPULATE from calendar click
+        setForm(prev => ({
+          ...prev,
+          date: bookingFormDefaults.date || '',           // AUTO from calendar
+          day: bookingFormDefaults.day || '',             // AUTO from calendar
+          period: bookingFormDefaults.period || '',       // AUTO from calendar
+          teacher: currentUser?.name || '',               // AUTO from logged-in user
+          teacherEmail: currentUser?.email || '',         // AUTO from logged-in user
+          yearLevel: '',
+          subject: '',
+          subjectCode: '',
+          room: '',
+          learners: [],
+          selectedSAC: {},
+          status: 'pending'
+        }));
+      }
+    }
+  }, [bookingFormOpen, editingBooking, bookingFormDefaults, currentUser]);
+
+  if (!bookingFormOpen) return null;
+
+  // Filter subjects by selected year level
+  const filteredSubjects = form.yearLevel 
+    ? getSubjectsByYearLevel(subjects, form.yearLevel)
+    : subjects;
+
+  // Filter learners by year level + SAC conditions + search term
+  let filteredLearners = form.yearLevel
+    ? getLearnersByYearLevelWithSAC(learners, form.yearLevel)
+    : learners.filter(l => {
+        const hasSAC = l.sacConditions && 
+                       l.sacConditions !== '' && 
+                       l.sacConditions !== '[]';
+        return hasSAC && !l.isDeclined;
+      });
+
+  // Apply search filter
+  if (learnerSearch.trim()) {
+    const search = learnerSearch.toLowerCase();
+    filteredLearners = filteredLearners.filter(l => {
+      const fullName = `${l.firstName} ${l.lastName}`.toLowerCase();
+      const studentId = (l.studentId || '').toString().toLowerCase();
+      return fullName.includes(search) || studentId.includes(search);
+    });
+  }
+
+  const updateForm = (updates) => {
+    setForm(prev => ({ ...prev, ...updates }));
+    setCapacityError(null);
+  };
+
+  const handleYearLevelChange = (yearLevel) => {
+    updateForm({
+      yearLevel,
+      subject: '',
+      subjectCode: '',
+      learners: [],
+      selectedSAC: {},
+      declinedSACLearners: [],
+      declinedSACReasons: {}
+    });
+    setLearnerSearch(''); // Clear search when year level changes
+  };
+
+  const addLearner = (learnerId) => {
+    if (form.learners.includes(learnerId)) return;
+    
+    // Check capacity
+    const newLearnerCount = form.learners.length + 1;
+    
+    if (!canBookSlots(form.date, form.day, form.period, newLearnerCount)) {
+      const available = getAvailableSlots(form.date, form.day, form.period);
+      setCapacityError(`Only ${available} slot(s) available. Cannot add more learners.`);
+      return;
+    }
+    
+    const learner = findLearnerById(learners, learnerId);
+    const conditions = getConditionsArray(learner?.sacConditions);
+    
+    // Default: select ALL SAC conditions for this learner
+    updateForm({
+      learners: [...form.learners, learnerId],
+      selectedSAC: {
+        ...form.selectedSAC,
+        [learnerId]: [...conditions] // All SAC by default
+      }
+    });
+  };
+
+  const removeLearner = (learnerId) => {
+    const newSelectedSAC = { ...form.selectedSAC };
+    delete newSelectedSAC[learnerId];
+    
+    const newDeclinedReasons = { ...form.declinedSACReasons };
+    delete newDeclinedReasons[learnerId];
+    
+    updateForm({
+      learners: form.learners.filter(id => id !== learnerId),
+      selectedSAC: newSelectedSAC,
+      declinedSACLearners: form.declinedSACLearners.filter(id => id !== learnerId),
+      declinedSACReasons: newDeclinedReasons
+    });
+  };
+
+  // Toggle individual SAC condition for a learner
+  const toggleSACCondition = (learnerId, condition) => {
+    const currentSAC = form.selectedSAC[learnerId] || [];
+    const learner = findLearnerById(learners, learnerId);
+    const allConditions = getConditionsArray(learner?.sacConditions);
+    
+    let newSAC;
+    
+    if (condition === 'ALL') {
+      // Toggle ALL: if all selected, deselect all; otherwise select all
+      newSAC = currentSAC.length === allConditions.length ? [] : [...allConditions];
+    } else if (condition === 'DECLINED') {
+      // Mark as declined
+      const newDeclinedList = form.declinedSACLearners.includes(learnerId)
+        ? form.declinedSACLearners.filter(id => id !== learnerId)
+        : [...form.declinedSACLearners, learnerId];
+      
+      updateForm({
+        declinedSACLearners: newDeclinedList,
+        selectedSAC: {
+          ...form.selectedSAC,
+          [learnerId]: [] // Clear SAC if declined
+        }
+      });
+      return;
+    } else {
+      // Toggle individual condition
+      newSAC = currentSAC.includes(condition)
+        ? currentSAC.filter(c => c !== condition)
+        : [...currentSAC, condition];
+    }
+    
+    updateForm({
+      selectedSAC: {
+        ...form.selectedSAC,
+        [learnerId]: newSAC
+      },
+      declinedSACLearners: form.declinedSACLearners.filter(id => id !== learnerId) // Remove from declined if selecting SAC
+    });
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    
+    console.log('========== SUBMITTING BOOKING ==========');
+    console.log('Form data:', form);
+    console.log('Learners array:', form.learners);
+    console.log('Selected SAC:', form.selectedSAC);
+    console.log('========================================');
+    
+    // Validate form
+    const validation = validateBookingForm(form);
+    if (!validation.isValid) {
+      showNotification(validation.errors[0], 'error');
+      return;
+    }
+
+    // Final capacity check
+    if (!canBookSlots(form.date, form.day, form.period, form.learners.length)) {
+      const available = getAvailableSlots(form.date, form.day, form.period);
+      showNotification(
+        `Cannot book ${form.learners.length} learner(s). Only ${available} slot(s) available.`,
+        'error'
+      );
+      return;
+    }
+
+    try {
+      await saveBooking(form, !!editingBooking);
+      showNotification(
+        editingBooking ? 'Booking updated successfully' : 'Booking created successfully',
+        'success'
+      );
+      closeBookingForm();
+    } catch (error) {
+      showNotification('Failed to save booking: ' + error.message, 'error');
+    }
+  };
+
+  const availableSlots = getAvailableSlots(form.date, form.day, form.period);
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+        
+        {/* Header */}
+        <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 py-4 flex justify-between items-center sticky top-0 z-10">
+          <h2 className="text-2xl font-bold text-white">
+            {editingBooking ? 'Edit Booking' : 'New Booking'}
+          </h2>
+          <button
+            onClick={closeBookingForm}
+            className="text-white hover:bg-blue-800 rounded-full p-2 transition"
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-6">
+          
+          {/* Section 1: Booking Details - AUTO POPULATED */}
+          <div className="border-b pb-4">
+            <h3 className="text-lg font-semibold text-gray-800 mb-4">📅 Booking Details</h3>
+            
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Date</label>
+                <input
+                  type="text"
+                  value={form.date}
+                  className="w-full px-4 py-2 border rounded-lg bg-gray-50 text-gray-700 font-semibold"
+                  readOnly
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Day</label>
+                <input
+                  type="text"
+                  value={form.day}
+                  className="w-full px-4 py-2 border rounded-lg bg-gray-50 text-gray-700 font-semibold"
+                  readOnly
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Period</label>
+                <input
+                  type="text"
+                  value={`Period ${form.period}`}
+                  className="w-full px-4 py-2 border rounded-lg bg-gray-50 text-gray-700 font-semibold"
+                  readOnly
+                />
+              </div>
+            </div>
+
+            {/* Capacity Info */}
+            <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+              <p className="text-sm text-blue-800">
+                <strong>Available slots:</strong> {availableSlots} / 6
+                {availableSlots === 0 && (
+                  <span className="ml-2 text-red-600 font-semibold">⚠️ Fully booked!</span>
+                )}
+              </p>
+            </div>
+
+            {capacityError && (
+              <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+                <p className="text-sm text-red-800 font-semibold">❌ {capacityError}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Section 2: Year Level */}
+          <div className="border-b pb-4">
+            <h3 className="text-lg font-semibold text-gray-800 mb-4">🎓 Year Level</h3>
+            
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                Select Year Level <span className="text-red-500">*</span>
+              </label>
+              <select
+                value={form.yearLevel}
+                onChange={(e) => handleYearLevelChange(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                required
+              >
+                <option value="">-- Select Year Level First --</option>
+                {YEAR_LEVELS.map(level => (
+                  <option key={level} value={level}>Year {level}</option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500 mt-1">
+                This filters subjects and learners
+              </p>
+            </div>
+          </div>
+
+          {/* Section 3: Teacher & Subject */}
+          {form.yearLevel && (
+            <div className="border-b pb-4">
+              <h3 className="text-lg font-semibold text-gray-800 mb-4">👨‍🏫 Teacher & Subject</h3>
+              
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Teacher <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={form.teacher}
+                    onChange={(e) => updateForm({ teacher: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    placeholder="Enter teacher name"
+                    required
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Auto-filled from your login. Edit if booking for another teacher.
+                  </p>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Teacher Room <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={form.room}
+                    onChange={(e) => updateForm({ room: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    placeholder="e.g., T136, Q110"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Subject <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={form.subject}
+                  onChange={(e) => {
+                    const subject = filteredSubjects.find(s => s.name === e.target.value);
+                    updateForm({
+                      subject: e.target.value,
+                      subjectCode: subject?.code || ''
+                    });
+                  }}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  required
+                >
+                  <option value="">-- Select Subject --</option>
+                  {filteredSubjects.map(subject => (
+                    <option key={subject.id} value={subject.name}>
+                      {subject.name} ({subject.code})
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">
+                  Showing Year {form.yearLevel} subjects
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Section 4: Learners with SEARCH and SAC Selection */}
+          {form.yearLevel && form.subject && (
+            <div>
+              <h3 className="text-lg font-semibold text-gray-800 mb-4">
+                👥 Select Learners ({form.learners.length} selected, max 6)
+              </h3>
+              
+              {/* Search Box */}
+              <div className="mb-4">
+                <input
+                  type="text"
+                  value={learnerSearch}
+                  onChange={(e) => setLearnerSearch(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  placeholder="🔍 Search by learner name or student ID..."
+                />
+              </div>
+
+              <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg mb-4">
+                <p className="text-sm text-yellow-800">
+                  <strong>Note:</strong> Only Year {form.yearLevel} learners with SAC conditions shown.
+                  Select individual SAC conditions for each learner below.
+                </p>
+              </div>
+
+              {filteredLearners.length === 0 ? (
+                <p className="text-gray-500 text-center py-8">
+                  {learnerSearch ? 'No learners match your search.' : `No Year ${form.yearLevel} learners with SAC found.`}
+                </p>
+              ) : (
+                <div className="space-y-4 max-h-96 overflow-y-auto">
+                  {filteredLearners.map(learner => {
+                    const isSelected = form.learners.includes(learner.id);
+                    const displayName = `${learner.firstName} ${learner.lastName}`;
+                    const allConditions = getConditionsArray(learner.sacConditions);
+                    const selectedConditions = form.selectedSAC[learner.id] || [];
+                    const isDeclined = form.declinedSACLearners.includes(learner.id);
+                    
+                    return (
+                      <div
+                        key={learner.id}
+                        className={`p-4 border-2 rounded-lg transition ${
+                          isSelected
+                            ? 'border-blue-500 bg-blue-50'
+                            : 'border-gray-200'
+                        }`}
+                      >
+                        {/* Learner Header */}
+                        <div className="flex items-start justify-between mb-3">
+                          <div className="flex-1">
+                            <div className="font-semibold text-gray-800 text-lg">{displayName}</div>
+                            <div className="text-sm text-gray-500">
+                              Year {learner.yearLevel} • ID: {learner.studentId || 'N/A'}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => isSelected ? removeLearner(learner.id) : addLearner(learner.id)}
+                            className={`px-4 py-2 rounded-lg font-semibold transition ${
+                              isSelected
+                                ? 'bg-red-100 text-red-700 hover:bg-red-200'
+                                : 'bg-blue-500 text-white hover:bg-blue-600'
+                            }`}
+                          >
+                            {isSelected ? '✕ Remove' : '+ Add'}
+                          </button>
+                        </div>
+
+                        {/* SAC Selection - Only show if learner is added */}
+                        {isSelected && (
+                          <div className="border-t pt-3">
+                            <div className="text-sm font-semibold text-gray-700 mb-2">
+                              Select SAC Conditions:
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {/* ALL button */}
+                              <button
+                                type="button"
+                                onClick={() => toggleSACCondition(learner.id, 'ALL')}
+                                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
+                                  selectedConditions.length === allConditions.length && !isDeclined
+                                    ? 'bg-purple-500 text-white'
+                                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                                }`}
+                              >
+                                ✓ All SAC
+                              </button>
+
+                              {/* Individual SAC conditions */}
+                              {allConditions.map(condition => (
+                                <button
+                                  type="button"
+                                  key={condition}
+                                  onClick={() => toggleSACCondition(learner.id, condition)}
+                                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
+                                    selectedConditions.includes(condition) && !isDeclined
+                                      ? 'bg-blue-500 text-white'
+                                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                                  }`}
+                                >
+                                  {condition}
+                                </button>
+                              ))}
+
+                              {/* DECLINED button */}
+                              <button
+                                type="button"
+                                onClick={() => toggleSACCondition(learner.id, 'DECLINED')}
+                                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
+                                  isDeclined
+                                    ? 'bg-red-500 text-white'
+                                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                                }`}
+                              >
+                                ✕ SAC Declined
+                              </button>
+                            </div>
+
+                            {/* Show selected SAC summary */}
+                            <div className="mt-2 text-xs text-gray-600">
+                              {isDeclined ? (
+                                <span className="text-red-600 font-semibold">SAC Declined for this booking</span>
+                              ) : selectedConditions.length === 0 ? (
+                                <span className="text-gray-500">No SAC selected</span>
+                              ) : selectedConditions.length === allConditions.length ? (
+                                <span className="text-green-600 font-semibold">All SAC selected</span>
+                              ) : (
+                                <span>Selected: {selectedConditions.join(', ')}</span>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Submit Buttons */}
+          <div className="flex justify-end space-x-3 pt-4 border-t">
+            <button
+              type="button"
+              onClick={closeBookingForm}
+              className="px-6 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-semibold"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={!form.yearLevel || !form.subject || form.learners.length === 0}
+              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold disabled:bg-gray-300 disabled:cursor-not-allowed"
+            >
+              {editingBooking ? 'Update Booking' : 'Create Booking'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+export default BookingFormModal;

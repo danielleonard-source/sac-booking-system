@@ -1,0 +1,169 @@
+import { useEffect, useState } from 'react'
+import useAuthStore from './store/authStore'
+import { useDataStore } from './store/dataStore'
+import { useUIStore } from './store/uiStore'
+
+import Login from './components/Login'
+import LoadingOverlay from './components/LoadingOverlay'
+import NotificationToast from './components/NotificationToast'
+import Calendar from './components/Calendar/Calendar'
+import Bookings from './components/Bookings/Bookings'
+import BookingFormModal from './components/Bookings/BookingFormModal'
+import EmailConfirmModal from './components/EmailConfirmModal'
+import DeclineModal from './components/DeclineModal'
+import Dashboard from './components/Dashboard/Dashboard'
+import AdminPanel from './components/Admin/AdminPanel'
+import AssignRWModal from './components/Modals/AssignRWModal'
+import CapacityModal from './components/Modals/CapacityModal'
+import BlockSlotModal from './components/Modals/BlockSlotModal'
+import LearnerFormModal from './components/Admin/LearnerFormModal'
+import TeacherFormModal from './components/Admin/TeacherFormModal'
+import RWFormModal from './components/Admin/RWFormModal'
+import VenueFormModal from './components/Admin/VenueFormModal'
+import SubjectFormModal from './components/Admin/SubjectFormModal'
+
+function MainApp() {
+  const [activeView, setActiveView] = useState('bookings')
+  
+  const { currentUser, userRole, logout } = useAuthStore()
+  const { loadData } = useDataStore()
+  const { showNotification, setLoading, bookingFormOpen, emailConfirmOpen, declineModalOpen, assignRWModalOpen, showLearnerForm, showTeacherForm, showRWForm, showVenueForm, showSubjectForm, capacityModalOpen, blockSlotModalOpen } = useUIStore()
+
+  useEffect(() => {
+    const initializeData = async () => {
+      setLoading(true, 'Loading data...')
+      try {
+        await loadData()
+        showNotification('Data loaded successfully!', 'success')
+      } catch (error) {
+        showNotification('Failed to load data. Please refresh the page.', 'error')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    initializeData()
+  }, [loadData, showNotification, setLoading])
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <header className="bg-white shadow">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex justify-between items-center">
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">
+                SAC Booking System
+              </h1>
+              <p className="text-sm text-gray-600">
+                Bethlehem College • {userRole === 'admin' ? 'Administrator' : 'Teacher'} Dashboard
+              </p>
+            </div>
+            <div className="flex items-center space-x-4">
+              <div className="text-right">
+                <p className="text-sm font-medium text-gray-900">
+                  {currentUser?.name}
+                </p>
+                <p className="text-xs text-gray-600">{currentUser?.email}</p>
+              </div>
+              <button
+                onClick={logout}
+                className="btn btn-secondary btn-sm"
+              >
+                Log Out
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <nav className="bg-white border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex space-x-8">
+            <button
+              onClick={() => setActiveView('bookings')}
+              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                activeView === 'bookings'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              📋 Bookings
+            </button>
+
+            <button
+              onClick={() => setActiveView('calendar')}
+              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                activeView === 'calendar'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              📅 Calendar
+            </button>
+            
+            {userRole === 'admin' && (
+              <>
+                <button
+                  onClick={() => setActiveView('dashboard')}
+                  className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                    activeView === 'dashboard'
+                      ? 'border-blue-500 text-blue-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  📊 Dashboard
+                </button>
+                
+                <button
+                  onClick={() => setActiveView('admin')}
+                  className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                    activeView === 'admin'
+                      ? 'border-blue-500 text-blue-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  ⚙️ Admin Panel
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </nav>
+
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {activeView === 'bookings' && <Bookings />}
+        {activeView === 'calendar' && <Calendar />}
+        {activeView === 'dashboard' && userRole === 'admin' && <Dashboard setActiveView={setActiveView} />}
+        {activeView === 'admin' && userRole === 'admin' && <AdminPanel />}
+      </main>
+
+      {bookingFormOpen && <BookingFormModal />}
+      {emailConfirmOpen && <EmailConfirmModal />}
+      {declineModalOpen && <DeclineModal />}
+      {assignRWModalOpen && <AssignRWModal />}
+      {showLearnerForm && <LearnerFormModal />}
+      {showTeacherForm && <TeacherFormModal />}
+      {showRWForm && <RWFormModal />}
+      {showVenueForm && <VenueFormModal />}
+            {showSubjectForm && <SubjectFormModal />}
+      {capacityModalOpen && <CapacityModal />}
+      {blockSlotModalOpen && <BlockSlotModal />}
+    </div>
+  )
+}
+
+export default function App() {
+  const { isLoggedIn, loadSavedUser } = useAuthStore()
+
+  useEffect(() => {
+    loadSavedUser()
+  }, [loadSavedUser])
+
+  return (
+    <>
+      {isLoggedIn ? <MainApp /> : <Login />}
+      <LoadingOverlay />
+      <NotificationToast />
+    </>
+  )
+}
